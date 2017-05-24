@@ -192,7 +192,7 @@ func (sts *stsAPIHandlers) AssumeRoleWithSAMLHandler(w http.ResponseWriter, r *h
 		return
 	}
 
-	expiryTime := UTCNow().Add(time.Duration(3600) * time.Second) // Default to 1hr.
+	expiryTime := UTCNow().Add(time.Duration(240) * time.Minute) // Defaults to 4hrs.
 	if r.PostForm.Get("DurationSeconds") != "" {
 		expirySecs, serr := strconv.ParseInt(r.PostForm.Get("DurationSeconds"), 10, 64)
 		if serr != nil {
@@ -203,9 +203,9 @@ func (sts *stsAPIHandlers) AssumeRoleWithSAMLHandler(w http.ResponseWriter, r *h
 
 		// The duration, in seconds, of the role session.
 		// The value can range from 900 seconds (15 minutes)
-		// to 3600 seconds (1 hour). By default, the value is
-		// set to 3600 seconds.
-		if expirySecs < 900 || expirySecs > 3600 {
+		// to 14400 seconds (4 hours). By default, the value
+		// is set to 14400 seconds.
+		if expirySecs < 900 || expirySecs > 14400 {
 			writeErrorResponse(w, ErrMalformedPOSTRequest, r.URL)
 			return
 		}
