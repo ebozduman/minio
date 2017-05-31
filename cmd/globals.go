@@ -156,6 +156,7 @@ func getGlobalInfo() (globalInfo map[string]interface{}) {
 		"isEnvBrowser":     globalIsEnvBrowser,
 		"isEnvCreds":       globalIsEnvCreds,
 		"isEnvRegion":      globalIsEnvRegion,
+		"isAuthCreds":      globalIsAuthCreds,
 		"isSSL":            globalIsSSL,
 		"serverRegion":     globalServerRegion,
 		"serverUserAgent":  globalServerUserAgent,

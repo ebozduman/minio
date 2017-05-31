@@ -221,12 +221,18 @@ func canonicalBrowserAuth(accessKey, token string) string {
 	return fmt.Sprintf("%s:%s", accessKey, token)
 }
 
-func authenticateWeb(accessKey, secretKey string) (string, error) {
-	saml := serverConfig.Auth.GetSAMLByID("1") // TODO: Needs to be configurable.
-	if saml.Enable {
-		return authenticateJWTWithSAML(accessKey, secretKey, defaultJWTExpiry, saml)
+func authenticateWeb(accessKey, secretKey string) (token string, err error) {
+	if !globalIsAuthCreds {
+		return authenticateJWT(accessKey, secretKey, defaultJWTExpiry)
 	}
-	return authenticateJWT(accessKey, secretKey, defaultJWTExpiry)
+	sps := serverConfig.Auth.GetSAML()
+	for _, saml := range sps {
+		// FIXME: This can be slower and browser might look like it hung.
+		if saml.Enable {
+			token, err = authenticateJWTWithSAML(accessKey, secretKey, defaultJWTExpiry, saml)
+		}
+	}
+	return token, err
 }
 
 func isAuthTokenValid(tokenStr string) bool {
