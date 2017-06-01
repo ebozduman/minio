@@ -17,6 +17,7 @@
 package cmd
 
 import (
+	"os"
 	"path/filepath"
 	"sync"
 
@@ -36,7 +37,8 @@ const minioCredsFile = "creds.json"
 
 func newServerCredentials() *serverCredentials {
 	return &serverCredentials{
-		Creds: make(map[string]credential),
+		Version: "1",
+		Creds:   make(map[string]credential),
 	}
 }
 
@@ -63,7 +65,11 @@ func (s *serverCredentials) RemoveCredential(accessKey string) {
 
 func (s *serverCredentials) Load() error {
 	_, err := quick.Load(filepath.Join(configDir.Get(), minioCredsFile), s)
-	return err
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	// If creds.json doesn't exist, its okay to proceed and ignore.
+	return nil
 }
 
 func (s *serverCredentials) Save() error {
