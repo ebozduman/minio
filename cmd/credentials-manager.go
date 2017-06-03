@@ -16,14 +16,23 @@
 
 package cmd
 
-import "sync"
+import (
+	"path/filepath"
+	"sync"
+
+	"github.com/minio/minio/pkg/quick"
+)
 
 type serverCredentials struct {
 	sync.RWMutex
-	Creds map[string]credential
+	Version string                `json:"version"`
+	Creds   map[string]credential `json:"creds"`
 }
 
 var globalServerCreds *serverCredentials
+
+// Minio credentials file.
+const minioCredsFile = "creds.json"
 
 func newServerCredentials() *serverCredentials {
 	return &serverCredentials{
@@ -50,4 +59,21 @@ func (s *serverCredentials) RemoveCredential(accessKey string) {
 	defer s.Unlock()
 
 	delete(s.Creds, accessKey)
+}
+
+func (s *serverCredentials) Load() error {
+	_, err := quick.Load(filepath.Join(configDir.Get(), minioCredsFile), s)
+	return err
+}
+
+func (s *serverCredentials) Save() error {
+	s.Lock()
+	defer s.Unlock()
+	// Purge all the expired entries before saving.
+	for k, v := range s.Creds {
+		if v.IsExpired() {
+			delete(s.Creds, k)
+		}
+	}
+	return quick.Save(filepath.Join(configDir.Get(), minioCredsFile), s)
 }

@@ -220,6 +220,13 @@ func (sts *stsAPIHandlers) AssumeRoleWithSAMLHandler(w http.ResponseWriter, r *h
 	// Set the newly generated credentials.
 	globalServerCreds.SetCredential(cred)
 
+	// Save newly generated credentials to disk.
+	if err = globalServerCreds.Save(); err != nil {
+		errorIf(err, "Unable to save STS credentials")
+		writeSTSErrorResponse(w, ErrSTSInternalError)
+		return
+	}
+
 	samlOutput := &AssumeRoleWithSAMLResult{
 		Credentials: cred,
 		// TODO
