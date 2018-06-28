@@ -583,19 +583,7 @@ func (a adminAPIHandlers) getConfigDotJSON() ([]byte, error) {
 
 	// Get config.json - in distributed mode, the configuration
 	// occurring on a quorum of the servers is returned.
-	configBytes, err := getPeerConfig(globalAdminPeers)
-	if err != nil {
-		return nil, err
-	}
-
-	// Pretty-print config received as json.
-	var buf bytes.Buffer
-	err = json.Indent(&buf, configBytes, "", "\t")
-	if err != nil {
-		return nil, err
-	}
-
-	return buf.Bytes(), nil
+	return getPeerConfig(globalAdminPeers)
 }
 
 // GetConfigHandler - GET /minio/admin/v1/config
@@ -617,12 +605,10 @@ func (a adminAPIHandlers) GetConfigHandler(w http.ResponseWriter, r *http.Reques
 	writeSuccessResponseJSON(w, configBytes)
 }
 
-// Disable tidwall json array notation in JSON key path so
-// users can set json with a key as a number.
-//    In tidwall json, notify.webhook.0 = val means { "notify" : { "webhook" : [val] }}
-//    In Minio, notify.webhook.0 = val means { "notify" : { "webhook" : {"0" : val}}}
-func normalizeJSONKey(input string) (key string) {
+func normKey(input string) (key string) {
+	// Split
 	subKeys := strings.Split(input, ".")
+
 	for i, k := range subKeys {
 		if i > 0 {
 			key += "."
@@ -668,8 +654,9 @@ func (a adminAPIHandlers) GetConfigKeysHandler(w http.ResponseWriter, r *http.Re
 		if key == "" {
 			continue
 		}
+
 		val := gjson.Get(configStr, key)
-		if j, err := sjson.Set(jsonResult, normalizeJSONKey(key), val.Value()); err == nil {
+		if j, err := sjson.Set(jsonResult, normKey(key), val.Value()); err == nil {
 			jsonResult = j
 		}
 	}
@@ -759,13 +746,6 @@ func (a adminAPIHandlers) setConfigDotJSON(ctx context.Context, configBytes []by
 	}
 	defer configLock.Unlock()
 
-	// Save a backup of the current config
-	errs = backupConfigPeers(globalAdminPeers)
-	rErr = reduceWriteQuorumErrs(ctx, errs, nil, len(globalAdminPeers)/2+1)
-	if rErr != nil {
-		return errs, rErr
-	}
-
 	// Rename the temporary config file to config.json
 	errs = commitConfigPeers(globalAdminPeers, tmpFileName)
 	rErr = reduceWriteQuorumErrs(ctx, errs, nil, len(globalAdminPeers)/2+1)
@@ -848,12 +828,6 @@ func (a adminAPIHandlers) SetConfigHandler(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	configBytes, err = json.MarshalIndent(config, "", "\t")
-	if err != nil {
-		writeCustomErrorResponseJSON(w, ErrAdminConfigBadJSON, err.Error(), r.URL)
-		return
-	}
-
 	peersErrs, err := a.setConfigDotJSON(ctx, configBytes)
 	if err != nil {
 		writeErrorResponseJSON(w, toAPIErrorCode(err), r.URL)
@@ -875,7 +849,7 @@ func (a adminAPIHandlers) SetConfigHandler(w http.ResponseWriter, r *http.Reques
 	sendServiceCmd(globalAdminPeers, serviceRestart)
 }
 
-func convertValueType(str string, jsonType gjson.Type) (interface{}, error) {
+func convertType(str string, jsonType gjson.Type) (interface{}, error) {
 	switch jsonType {
 	case gjson.False, gjson.True:
 		return strconv.ParseBool(str)
@@ -930,13 +904,16 @@ func (a adminAPIHandlers) SetConfigKeysHandler(w http.ResponseWriter, r *http.Re
 		if len(v) > 0 {
 			elem = v[0]
 		}
+
 		jsonFieldType := gjson.Get(origConfig, k).Type
-		val, cerr := convertValueType(elem, jsonFieldType)
+
+		val, cerr := convertType(elem, jsonFieldType)
 		if cerr != nil {
 			writeCustomErrorResponseJSON(w, ErrAdminConfigBadJSON, cerr.Error(), r.URL)
 			return
 		}
-		if s, serr := sjson.Set(configStr, normalizeJSONKey(k), val); serr == nil {
+
+		if s, serr := sjson.Set(configStr, normKey(k), val); serr == nil {
 			configStr = s
 		}
 	}
@@ -945,17 +922,7 @@ func (a adminAPIHandlers) SetConfigKeysHandler(w http.ResponseWriter, r *http.Re
 
 	// Validate config
 	var config serverConfig
-	if err = json.Unmarshal(configBytes, &config); err != nil {
-		writeCustomErrorResponseJSON(w, ErrAdminConfigBadJSON, err.Error(), r.URL)
-		return
-	}
-
-	if err = config.Validate(); err != nil {
-		writeCustomErrorResponseJSON(w, ErrAdminConfigBadJSON, err.Error(), r.URL)
-		return
-	}
-
-	if err = config.TestNotificationTargets(); err != nil {
+	if err := json.Unmarshal(configBytes, &config); err != nil {
 		writeCustomErrorResponseJSON(w, ErrAdminConfigBadJSON, err.Error(), r.URL)
 		return
 	}
@@ -971,11 +938,12 @@ func (a adminAPIHandlers) SetConfigKeysHandler(w http.ResponseWriter, r *http.Re
 		}
 	}
 
-	configBytes, err = json.MarshalIndent(config, "", "\t")
-	if err != nil {
-		writeCustomErrorResponseJSON(w, ErrAdminConfigBadJSON, err.Error(), r.URL)
-		return
-	}
+	// FIXME: merge validation PR first before we can use
+	// this snipped
+	// if err := sc.Validate(); err != nil {
+	//	writeErrorResponseJSON(w, toAPIErrorCode(err), r.URL)
+	//	return
+	// }
 
 	peersErrs, setErr := a.setConfigDotJSON(ctx, configBytes)
 	if setErr != nil {
