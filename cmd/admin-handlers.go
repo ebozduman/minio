@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -36,11 +37,13 @@ import (
 	"github.com/gorilla/mux"
 
 	"github.com/minio/minio/cmd/config"
+	"github.com/minio/minio/cmd/config/notify"
 	"github.com/minio/minio/cmd/crypto"
 	xhttp "github.com/minio/minio/cmd/http"
 	"github.com/minio/minio/cmd/logger"
 	"github.com/minio/minio/pkg/auth"
 	"github.com/minio/minio/pkg/cpu"
+	"github.com/minio/minio/pkg/event/target"
 	"github.com/minio/minio/pkg/handlers"
 	iampolicy "github.com/minio/minio/pkg/iam/policy"
 	"github.com/minio/minio/pkg/madmin"
@@ -53,6 +56,8 @@ const (
 	maxEConfigJSONSize = 262272
 	defaultNetPerfSize = 100 * humanize.MiByte
 )
+
+var errUnreachableEndpoint = errors.New("endpoint unreachable, please check your endpoint")
 
 // Type-safe query params.
 type mgmtQueryKey string
@@ -1302,4 +1307,244 @@ func (a adminAPIHandlers) ServerHardwareInfoHandler(w http.ResponseWriter, r *ht
 	default:
 		writeErrorResponseJSON(ctx, w, errorCodes.ToAPIErr(ErrBadRequest), r.URL)
 	}
+}
+
+// ServerAdminInfoHandler - GET /minio/admin/v1/admininfo
+// ----------
+// Get server information
+func (a adminAPIHandlers) ServerAdminInfoHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := newContext(r, w, "ServerAdminInfo")
+	objectAPI := validateAdminReq(ctx, w, r)
+	if objectAPI == nil {
+		return
+	}
+
+	cfg, err := readServerConfig(ctx, objectAPI)
+	if err != nil {
+		writeErrorResponseJSON(ctx, w, toAdminAPIErr(ctx, err), r.URL)
+		return
+	}
+	vault := madmin.Vault{}
+	if GlobalKMS != nil {
+		vault = fetchVaultStatus(cfg)
+	}
+
+	ldap := madmin.Ldap{}
+	if globalLDAPConfig.Enabled {
+		ldapConn, err := globalLDAPConfig.Connect()
+		if err != nil {
+			ldap.Status = "Offline"
+		}
+		if ldapConn == nil {
+			ldap.Status = "LDAP server not configured:"
+		}
+	}
+
+	log, audit, err := fetchLoggerInfo(cfg)
+	notifyTarget := fetchLambdaInfo(cfg)
+
+	// Fetching the Storage information
+	storageInfo := objectAPI.StorageInfo(ctx)
+	backendInfo := madmin.BackendInfo{}
+
+	// List of all disk status, this is only meaningful if BackendType is Erasure.
+	if storageInfo.Backend.Type == BackendErasure {
+		backendInfo = madmin.BackendInfo{
+			Type:             storageInfo.Backend.Type,
+			OnlineDisks:      storageInfo.Backend.OnlineDisks,
+			OfflineDisks:     storageInfo.Backend.OfflineDisks,
+			StandardSCData:   storageInfo.Backend.StandardSCData,
+			StandardSCParity: storageInfo.Backend.StandardSCParity,
+			RRSCData:         storageInfo.Backend.RRSCData,
+			RRSCParity:       storageInfo.Backend.RRSCData,
+		}
+	} else {
+		backendInfo = madmin.BackendInfo{
+			Type: storageInfo.Backend.Type,
+		}
+	}
+
+	mode := ""
+	if globalSafeMode {
+		mode = "safe"
+	} else {
+		mode = "online"
+	}
+
+	infoMsg := madmin.InfoMessage{
+		Mode:         mode,
+		Domain:       globalDomainNames,
+		Region:       globalServerRegion,
+		SQSARN:       globalNotificationSys.GetARNList(),
+		DeploymentID: globalDeploymentID,
+		Buckets: struct {
+			Count int `json:"count"`
+		}{
+			Count: 20,
+		},
+		Objects: struct {
+			Count int `json:"count"`
+		}{
+			Count: 100,
+		},
+		Usage: struct {
+			Size int `json:"size"`
+		}{
+			Size: 1024,
+		},
+		Services: struct {
+			Vault         madmin.Vault         `json:"vault"`
+			Ldap          madmin.Ldap          `json:"ldap"`
+			Logger        []madmin.Logger      `json:"logger"`
+			Audit         []madmin.Audit       `json:"audit"`
+			Notifications madmin.Notifications `json:"notifications"`
+		}{
+			Vault:         vault,
+			Ldap:          ldap,
+			Logger:        log,
+			Audit:         audit,
+			Notifications: notifyTarget,
+		},
+		Backend: backendInfo,
+	}
+
+	// Marshal API response
+	jsonBytes, err := json.Marshal(infoMsg)
+	fmt.Println(" The json is ", string(jsonBytes))
+	if err != nil {
+		writeErrorResponseJSON(ctx, w, toAdminAPIErr(ctx, err), r.URL)
+		return
+	}
+
+	//Reply with storage information (across nodes in a
+	// distributed setup) as json.
+	writeSuccessResponseJSON(w, jsonBytes)
+}
+
+func fetchLambdaInfo(cfg config.Config) madmin.Notifications {
+	webhook := []madmin.WebhookTarget{}
+	webhookTargets, err := notify.GetNotifyWebhook(cfg[config.NotifyWebhookSubSys], globalRootCAs)
+	if err == nil {
+		for i, wh := range webhookTargets {
+			if wh.Enable {
+				webhook = append(webhook, madmin.WebhookTarget{
+					Target: i,
+					Status: madmin.Status{
+						Status: "Online",
+					},
+				})
+			}
+		}
+	}
+	lambda := madmin.Notifications{
+		Webhook: webhook,
+	}
+
+	return lambda
+}
+
+// fetchVaultStatus fetches Vault Info
+func fetchVaultStatus(cfg config.Config) madmin.Vault {
+	vault := madmin.Vault{}
+	_, err := crypto.LookupConfig(cfg[config.KmsVaultSubSys][config.Default])
+	keyID := GlobalKMS.KeyID()
+
+	kmsContext := crypto.Context{"MinIO admin API": "KMSKeyStatusHandler"} // Context for a test key operation
+	// 1. Generate a new key using the KMS.
+	key, sealedKey, err := GlobalKMS.GenerateKey(keyID, kmsContext)
+	if err != nil {
+		vault.Encrypt = "Encryption failed"
+	} else {
+		vault.Encrypt = "Ok"
+	}
+
+	// 2. Check whether we can update / re-wrap the sealed key.
+	sealedKey, err = GlobalKMS.UpdateKey(keyID, sealedKey, kmsContext)
+	if err != nil {
+		vault.Update = "Re-wrap failed:"
+	} else {
+		vault.Update = "Ok"
+	}
+
+	// 3. Verify that we can indeed decrypt the (encrypted) key
+	decryptedKey, decryptErr := GlobalKMS.UnsealKey(keyID, sealedKey, kmsContext)
+
+	// 4. Compare generated key with decrypted key
+	if subtle.ConstantTimeCompare(key[:], decryptedKey[:]) != 1 || decryptErr != nil {
+		vault.Decrypt = "Re-wrap failed:"
+	} else {
+		vault.Decrypt = "Ok"
+	}
+	return vault
+}
+
+// fetchLoggerDetails return log info
+func fetchLoggerInfo(cfg config.Config) ([]madmin.Logger, []madmin.Audit, error) {
+	log := []madmin.Logger{}
+	audit := []madmin.Audit{}
+	loggerCfg, err := logger.LookupConfig(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	for i, l := range loggerCfg.HTTP {
+		if l.Enabled {
+			err := checkConnection(l.Endpoint)
+			if err == nil {
+				log = append(log, madmin.Logger{
+					Target: i,
+					Status: madmin.Status{
+						Status: "Online",
+					},
+				})
+			} else {
+				log = append(log, madmin.Logger{
+					Target: i,
+					Status: madmin.Status{
+						Status: "Offline",
+					},
+				})
+			}
+		}
+	}
+
+	for i, l := range loggerCfg.Audit {
+		if l.Enabled {
+			err := checkConnection(l.Endpoint)
+			if err == nil {
+				audit = append(audit, madmin.Audit{
+					Target: i,
+					Status: madmin.Status{
+						Status: "Online",
+					},
+				})
+			} else {
+				audit = append(audit, madmin.Audit{
+					Target: i,
+					Status: madmin.Status{
+						Status: "Offline",
+					},
+				})
+			}
+		}
+	}
+	return log, audit, nil
+}
+
+// checkConnection - ping an endpoint , return err in case of no connection
+func checkConnection(endpointStr string) error {
+	u, pErr := xnet.ParseURL(endpointStr)
+	if pErr != nil {
+		return pErr
+	}
+	if dErr := u.DialHTTP(); dErr != nil {
+		if urlErr, ok := dErr.(*url.Error); ok {
+			// To treat "connection refused" errors as errUnreachableEndpoint.
+			if target.IsConnRefusedErr(urlErr.Err) {
+				return errUnreachableEndpoint
+			}
+		}
+		return dErr
+	}
+	return nil
 }

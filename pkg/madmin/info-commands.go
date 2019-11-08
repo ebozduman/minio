@@ -39,9 +39,6 @@ const (
 	DefaultDrivePerfSize = 100 * humanize.MiByte
 )
 
-// BackendType - represents different backend types.
-type BackendType int
-
 // Enum for different backend types.
 const (
 	Unknown BackendType = iota
@@ -408,4 +405,120 @@ func (adm *AdminClient) NetPerfInfo(size int) (map[string][]NetPerfInfo, error) 
 	}
 
 	return info, nil
+}
+
+// InfoMessage container to hold server admin related information.
+type InfoMessage struct {
+	Mode         string   `json:"mode"`
+	Domain       []string `json:"domain"`
+	Region       string   `json:"region"`
+	SQSARN       []string `json:"sqsARN"`
+	DeploymentID string   `json:"deploymentID"`
+	Buckets      struct {
+		Count int `json:"count"`
+	} `json:"buckets"`
+	Objects struct {
+		Count int `json:"count"`
+	} `json:"objects"`
+	Usage struct {
+		Size int `json:"size"`
+	} `json:"usage"`
+	Services struct {
+		Vault         Vault         `json:"vault"`
+		Ldap          Ldap          `json:"ldap"`
+		Logger        []Logger      `json:"logger"`
+		Audit         []Audit       `json:"audit"`
+		Notifications Notifications `json:"notifications"`
+	} `json:"services"`
+	Backend BackendInfo `json:"backend"`
+}
+
+// Vault - Fetches the Vault status
+type Vault struct {
+	Status  string `json:"status"`
+	Encrypt string `json:"encrypt"`
+	Decrypt string `json:"decrypt"`
+	Update  string `json:"update"`
+}
+
+// Ldap contains status
+type Ldap struct {
+	Status string `json:"status"`
+}
+
+// Status of endpoint
+type Status struct {
+	Status string `json:"status"`
+}
+
+// Logger contains logger status
+type Logger struct {
+	Target string `json:"target"`
+	Status Status `json:"status"`
+}
+
+// Audit contains audit logger status
+type Audit struct {
+	Target string `json:"target"`
+	Status Status `json:"status"`
+}
+
+// Notifications contains notification target info
+type Notifications struct {
+	Webhook []WebhookTarget `json:"webhook"`
+	// Target  string        `json:"target"`
+	// Status  Status        `json:"status"`
+}
+
+// WebhookTarget Contains  Webhook info
+type WebhookTarget struct {
+	Target string `json:"target"`
+	Status Status `json:"status"`
+}
+
+// BackendInfo type.
+type BackendInfo struct {
+	// Represents various backend types, currently on FS and Erasure.
+	Type int
+
+	// Following fields are only meaningful if BackendType is Erasure.
+	OnlineDisks      BackendDisks // Online disks during server startup.
+	OfflineDisks     BackendDisks // Offline disks during server startup.
+	StandardSCData   int          // Data disks for currently configured Standard storage class.
+	StandardSCParity int          // Parity disks for currently configured Standard storage class.
+	RRSCData         int          // Data disks for currently configured Reduced Redundancy storage class.
+	RRSCParity       int          // Parity disks for currently configured Reduced Redundancy storage class.
+
+}
+
+// ServerAdminInfo - Connect to a minio server and call Server Admin Info Management API
+// to fetch server's information represented by infoMessage structure
+func (adm *AdminClient) ServerAdminInfo() (InfoMessage, error) {
+
+	resp, err := adm.executeMethod("GET", requestData{relPath: adminAPIPrefix + "/admininfo"})
+	defer closeResponse(resp)
+	if err != nil {
+		return InfoMessage{}, err
+	}
+
+	// Check response http status code
+	if resp.StatusCode != http.StatusOK {
+		return InfoMessage{}, httpRespToErrorResponse(resp)
+	}
+
+	// // Unmarshal the server's json response
+	// var serversInfo []ServerInfo
+	var message InfoMessage
+
+	respBytes, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return InfoMessage{}, err
+	}
+
+	err = json.Unmarshal(respBytes, &message)
+	if err != nil {
+		return InfoMessage{}, err
+	}
+
+	return message, nil
 }

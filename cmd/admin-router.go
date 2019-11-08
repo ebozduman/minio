@@ -48,6 +48,8 @@ func registerAdminRouter(router *mux.Router, enableConfigOps, enableIAMOps bool)
 
 	// Info operations
 	adminRouter.Methods(http.MethodGet).Path(adminAPIVersionPrefix + "/info").HandlerFunc(httpTraceAll(adminAPI.ServerInfoHandler))
+	// Admin-Info operations
+	adminRouter.Methods(http.MethodGet).Path(adminAPIVersionPrefix + "/admininfo").HandlerFunc(httpTraceAll(adminAPI.ServerAdminInfoHandler))
 	// Harware Info operations
 	adminRouter.Methods(http.MethodGet).Path(adminAPIVersionPrefix+"/hardware").HandlerFunc(httpTraceAll(adminAPI.ServerHardwareInfoHandler)).Queries("hwType", "{hwType:.*}")
 

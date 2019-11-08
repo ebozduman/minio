@@ -24,6 +24,7 @@ import (
 // Target - event target interface
 type Target interface {
 	ID() TargetID
+	IsActive() (bool, error)
 	Save(Event) error
 	Send(string) error
 	Close() error
