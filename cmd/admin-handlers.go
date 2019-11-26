@@ -41,7 +41,6 @@ import (
 	"github.com/minio/minio/cmd/crypto"
 	xhttp "github.com/minio/minio/cmd/http"
 	"github.com/minio/minio/cmd/logger"
-	"github.com/minio/minio/pkg/auth"
 	"github.com/minio/minio/pkg/cpu"
 	"github.com/minio/minio/pkg/event/target"
 	"github.com/minio/minio/pkg/handlers"
@@ -105,7 +104,7 @@ func updateServer(updateURL, sha256Hex string, latestReleaseTime time.Time) (us 
 func (a adminAPIHandlers) ServerUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "ServerUpdate")
 
-	objectAPI, _ := validateAdminReq(ctx, w, r, iampolicy.ServerUpdateAdminAction)
+	objectAPI := validateAdminReq(ctx, w, r)
 	if objectAPI == nil {
 		return
 	}
@@ -187,7 +186,7 @@ func (a adminAPIHandlers) ServiceActionHandler(w http.ResponseWriter, r *http.Re
 	vars := mux.Vars(r)
 	action := vars["action"]
 
-	objectAPI, _ := validateAdminReq(ctx, w, r, "")
+	objectAPI := validateAdminReq(ctx, w, r)
 	if objectAPI == nil {
 		return
 	}
@@ -272,7 +271,7 @@ type ServerInfo struct {
 // Get server information
 func (a adminAPIHandlers) ServerInfoHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "ServerInfo")
-	objectAPI, _ := validateAdminReq(ctx, w, r, iampolicy.ListServerInfoAdminAction)
+	objectAPI := validateAdminReq(ctx, w, r)
 	if objectAPI == nil {
 		return
 	}
@@ -313,7 +312,7 @@ func (a adminAPIHandlers) ServerInfoHandler(w http.ResponseWriter, r *http.Reque
 // Get server information
 func (a adminAPIHandlers) StorageInfoHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "StorageInfo")
-	objectAPI, _ := validateAdminReq(ctx, w, r, iampolicy.ListServerInfoAdminAction)
+	objectAPI := validateAdminReq(ctx, w, r)
 	if objectAPI == nil {
 		return
 	}
@@ -367,7 +366,7 @@ type ServerNetReadPerfInfo struct {
 func (a adminAPIHandlers) PerfInfoHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "PerfInfo")
 
-	objectAPI, _ := validateAdminReq(ctx, w, r, iampolicy.ListServerInfoAdminAction)
+	objectAPI := validateAdminReq(ctx, w, r)
 	if objectAPI == nil {
 		return
 	}
@@ -538,7 +537,7 @@ type PeerLocks struct {
 func (a adminAPIHandlers) TopLocksHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "TopLocks")
 
-	objectAPI, _ := validateAdminReq(ctx, w, r, iampolicy.ListServerInfoAdminAction)
+	objectAPI := validateAdminReq(ctx, w, r)
 	if objectAPI == nil {
 		return
 	}
@@ -583,7 +582,7 @@ type StartProfilingResult struct {
 func (a adminAPIHandlers) StartProfilingHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "StartProfiling")
 
-	objectAPI, _ := validateAdminReq(ctx, w, r, iampolicy.ListServerInfoAdminAction)
+	objectAPI := validateAdminReq(ctx, w, r)
 	if objectAPI == nil {
 		return
 	}
@@ -665,7 +664,7 @@ func (f dummyFileInfo) Sys() interface{}   { return f.sys }
 func (a adminAPIHandlers) DownloadProfilingHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "DownloadProfiling")
 
-	objectAPI, _ := validateAdminReq(ctx, w, r, iampolicy.ListServerInfoAdminAction)
+	objectAPI := validateAdminReq(ctx, w, r)
 	if objectAPI == nil {
 		return
 	}
@@ -757,7 +756,7 @@ func extractHealInitParams(vars map[string]string, qParms url.Values, r io.Reade
 func (a adminAPIHandlers) HealHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "Heal")
 
-	objectAPI, _ := validateAdminReq(ctx, w, r, iampolicy.HealAdminAction)
+	objectAPI := validateAdminReq(ctx, w, r)
 	if objectAPI == nil {
 		return
 	}
@@ -901,7 +900,7 @@ func (a adminAPIHandlers) HealHandler(w http.ResponseWriter, r *http.Request) {
 func (a adminAPIHandlers) BackgroundHealStatusHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "HealBackgroundStatus")
 
-	objectAPI, _ := validateAdminReq(ctx, w, r, iampolicy.HealAdminAction)
+	objectAPI := validateAdminReq(ctx, w, r)
 	if objectAPI == nil {
 		return
 	}
@@ -941,24 +940,22 @@ func (a adminAPIHandlers) BackgroundHealStatusHandler(w http.ResponseWriter, r *
 	w.(http.Flusher).Flush()
 }
 
-func validateAdminReq(ctx context.Context, w http.ResponseWriter, r *http.Request, action iampolicy.AdminAction) (ObjectLayer, auth.Credentials) {
-	var cred auth.Credentials
-	var adminAPIErr APIErrorCode
+func validateAdminReq(ctx context.Context, w http.ResponseWriter, r *http.Request) ObjectLayer {
 	// Get current object layer instance.
 	objectAPI := newObjectLayerWithoutSafeModeFn()
 	if objectAPI == nil || globalNotificationSys == nil {
 		writeErrorResponseJSON(ctx, w, errorCodes.ToAPIErr(ErrServerNotInitialized), r.URL)
-		return nil, cred
+		return nil
 	}
 
 	// Validate request signature.
-	cred, adminAPIErr = checkAdminRequestAuthType(ctx, r, action, "")
+	_, adminAPIErr := checkAdminRequestAuthType(ctx, r, iampolicy.ConfigUpdateAdminAction, "")
 	if adminAPIErr != ErrNone {
 		writeErrorResponseJSON(ctx, w, errorCodes.ToAPIErr(adminAPIErr), r.URL)
-		return nil, cred
+		return nil
 	}
 
-	return objectAPI, cred
+	return objectAPI
 }
 
 // AdminError - is a generic error for all admin APIs.
@@ -1049,7 +1046,7 @@ func (a adminAPIHandlers) TraceHandler(w http.ResponseWriter, r *http.Request) {
 	trcErr := r.URL.Query().Get("err") == "true"
 
 	// Validate request signature.
-	_, adminAPIErr := checkAdminRequestAuthType(ctx, r, iampolicy.ListServerInfoAdminAction, "")
+	_, adminAPIErr := checkAdminRequestAuthType(ctx, r, iampolicy.ConfigUpdateAdminAction, "")
 	if adminAPIErr != ErrNone {
 		writeErrorResponseJSON(ctx, w, errorCodes.ToAPIErr(adminAPIErr), r.URL)
 		return
@@ -1103,7 +1100,7 @@ func (a adminAPIHandlers) TraceHandler(w http.ResponseWriter, r *http.Request) {
 func (a adminAPIHandlers) ConsoleLogHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "ConsoleLog")
 
-	objectAPI, _ := validateAdminReq(ctx, w, r, iampolicy.ListServerInfoAdminAction)
+	objectAPI := validateAdminReq(ctx, w, r)
 	if objectAPI == nil {
 		return
 	}
@@ -1174,7 +1171,7 @@ func (a adminAPIHandlers) ConsoleLogHandler(w http.ResponseWriter, r *http.Reque
 func (a adminAPIHandlers) KMSKeyStatusHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "KMSKeyStatusHandler")
 
-	objectAPI, _ := validateAdminReq(ctx, w, r, iampolicy.ListServerInfoAdminAction)
+	objectAPI := validateAdminReq(ctx, w, r)
 	if objectAPI == nil {
 		return
 	}
@@ -1259,7 +1256,7 @@ func (a adminAPIHandlers) KMSKeyStatusHandler(w http.ResponseWriter, r *http.Req
 func (a adminAPIHandlers) ServerHardwareInfoHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "HardwareInfo")
 
-	objectAPI, _ := validateAdminReq(ctx, w, r, iampolicy.ListServerInfoAdminAction)
+	objectAPI := validateAdminReq(ctx, w, r)
 	if objectAPI == nil {
 		return
 	}
@@ -1350,7 +1347,7 @@ func (a adminAPIHandlers) ServerAdminInfoHandler(w http.ResponseWriter, r *http.
 	// List of all disk status, this is only meaningful if BackendType is Erasure.
 	if storageInfo.Backend.Type == BackendErasure {
 		backendInfo = madmin.BackendInfo{
-			Type:             storageInfo.Backend.Type,
+			Type:             backendInfo.Type,
 			OnlineDisks:      storageInfo.Backend.OnlineDisks,
 			OfflineDisks:     storageInfo.Backend.OfflineDisks,
 			StandardSCData:   storageInfo.Backend.StandardSCData,
@@ -1360,7 +1357,7 @@ func (a adminAPIHandlers) ServerAdminInfoHandler(w http.ResponseWriter, r *http.
 		}
 	} else {
 		backendInfo = madmin.BackendInfo{
-			Type: storageInfo.Backend.Type,
+			Type: backendInfo.Type,
 		}
 	}
 
